@@ -1,0 +1,34 @@
+{
+  "name": "doppel",
+  "version": "0.1.0",
+  "description": "Find the vulnerable twins of a hacked smart contract, across chains, before attackers do.",
+  "type": "module",
+  "bin": {
+    "doppel": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "keywords": [
+    "web3",
+    "security",
+    "smart-contract",
+    "evm",
+    "bytecode",
+    "vulnerability",
+    "fork-detection",
+    "clone-detection"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}
