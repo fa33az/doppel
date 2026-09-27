@@ -1,0 +1,49 @@
+doppel
+Copyright (c) 2026 Fawwaz Fadhil Rasyad and the doppel contributors
+
+doppel's own code and documentation are licensed under the MIT License
+(see LICENSE). This repository also contains material from third parties,
+which is NOT covered by doppel's license and keeps its own terms:
+
+
+1. Logo (assets/logo-light.svg, assets/logo-dark.svg)
+
+   The wordmark is drawn from glyph outlines of Hack Bold.
+
+   Hack
+   Copyright (c) 2018 Source Foundry Authors
+   Licensed under the MIT License.
+   https://github.com/source-foundry/Hack
+
+   Bitstream Vera Sans Mono
+   Copyright (c) 2003 Bitstream, Inc.
+   Licensed under the Bitstream Vera License, with Reserved Font Names
+   "Bitstream" and "Vera".
+
+   DejaVu modifications of Bitstream Vera Sans Mono were committed to the
+   public domain.
+
+   The logo itself is part of the doppel project. You're welcome to use it to
+   refer to doppel (in articles, talks, integrations), but please don't use it
+   in a way that suggests endorsement, or as the logo of a different project.
+
+
+2. Contract bytecode (examples/mainnet/*.hex)
+
+   These files are the runtime bytecode of smart contracts deployed on public
+   blockchains (Uniswap, SushiSwap, PancakeSwap, QuickSwap, Trader Joe,
+   Biswap, ApeSwap, Compound, Venus, Aave, Circle, MakerDAO and the WETH9
+   contract). They were read unmodified from the chains listed in
+   examples/mainnet/manifest.json and are included only as test fixtures and
+   benchmark data.
+
+   They remain the work of their respective authors and are subject to each
+   project's own license. Nothing in this repository grants any rights to them.
+   Project names are used only to identify the contracts; doppel is not
+   affiliated with or endorsed by any of these projects.
+
+
+3. Runtime dependency
+
+   viem (https://github.com/wevm/viem), MIT License, installed from npm and
+   not vendored in this repository.

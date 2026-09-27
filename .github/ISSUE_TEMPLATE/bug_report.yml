@@ -1,0 +1,44 @@
+name: Bug report
+description: doppel crashed, gave a wrong score, or did something unexpected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Found a security problem in doppel itself? Please report it privately instead, see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: doppel version
+      description: Output of `doppel --version`
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      description: Include the sources (chain:address is ideal, since anyone can re-fetch it).
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Paste the output. `--json` output is even better.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: For scoring issues, say why you believe the contracts are (or aren't) forks of each other.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Node version and OS
+      placeholder: node 22.4, ubuntu 24.04

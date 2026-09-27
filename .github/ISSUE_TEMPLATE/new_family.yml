@@ -1,0 +1,39 @@
+name: Labeled contracts for the benchmark
+description: Suggest a known contract and its forks so doppel can be tested on them
+labels: [data]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        More labeled data is the most useful contribution to doppel. You don't need to write any code: list the contracts here and someone can add them. Only publicly deployed contracts, please.
+  - type: input
+    id: family
+    attributes:
+      label: Family
+      description: What the original contract is
+      placeholder: Compound v2 cToken
+    validations:
+      required: true
+  - type: textarea
+    id: forks
+    attributes:
+      label: Contracts in this family
+      description: One per line as chain:address, with a name. Put the original first.
+      placeholder: |
+        ethereum:0x… Compound cUSDC (original)
+        optimism:0x… Sonne soUSDC
+        bsc:0x…      Venus vUSDC
+    validations:
+      required: true
+  - type: textarea
+    id: controls
+    attributes:
+      label: Lookalikes that are NOT forks (optional)
+      description: Contracts that do something similar but were written separately. These make the benchmark much harder to game.
+  - type: textarea
+    id: source
+    attributes:
+      label: How do you know they're forks?
+      description: Repo links, audit reports, docs, verified source on an explorer...
+    validations:
+      required: true

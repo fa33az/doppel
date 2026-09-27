@@ -7,6 +7,12 @@
 
 <p align="center"><em>Find the vulnerable twins of a hacked smart contract, across chains, before attackers do.</em></p>
 
+<p align="center">
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  <img alt="Node 18+" src="https://img.shields.io/badge/node-%E2%89%A518-339933">
+  <a href="CONTRIBUTING.md"><img alt="Contributions welcome" src="https://img.shields.io/badge/contributions-welcome-orange"></a>
+</p>
+
 When a contract gets drained, the bug rarely lives in just one place. DeFi code
 gets forked constantly, and a fork inherits its parent's bugs along with
 everything else. Compound v2 forks got hit one after another through the same
@@ -204,13 +210,13 @@ are the single most useful contribution you could make (see below).
 
 ## Contributing
 
-The most valuable PR is a new labeled family in `examples/mainnet`: a known
+Contributions are welcome, and you don't need to be a bytecode expert to make a
+useful one. The thing doppel needs most is **more labeled data**: a known
 contract, a few of its forks on any chain, and a couple of lookalikes that
-*aren't* forks. Add them with `doppel dump chain:0x… > name.hex`, list them in
-`manifest.json`, and run `npm test` (it fails if any labeled pair lands on the
-wrong side of the default threshold).
+*aren't* forks. You can even just [list them in an issue](https://github.com/fa33az/doppel/issues/new?template=new_family.yml)
+and someone will add them.
 
-Ideas that would be great to have:
+Open areas:
 
 - `doppel hunt <address>`: find candidates automatically (same deployer, same
   selector set, factory children)
@@ -218,6 +224,28 @@ Ideas that would be great to have:
 - a GitHub Action / watch mode for protocols that want to know when a new twin
   of their code shows up
 
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for setup, project layout and the
+ground rules. Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+Found a bug in doppel itself, or a way to evade it? Please report it privately,
+see [SECURITY.md](SECURITY.md). The same file explains what to do when doppel
+points you at a live contract that looks vulnerable: verify, tell the owners
+privately, and don't touch the funds.
+
 ## License
 
-MIT
+doppel is released under the [MIT License](LICENSE). You can use it, modify
+it, and ship it in commercial or closed-source work, as long as the copyright
+and license notice stay with it.
+
+Contributions are accepted under the same license (inbound = outbound, see
+[CONTRIBUTING.md](CONTRIBUTING.md#licensing-of-contributions)).
+
+Some material in this repository belongs to third parties and keeps its own
+terms: the logo is drawn from the Hack typeface (MIT and Bitstream Vera
+License), and `examples/mainnet` holds bytecode of publicly deployed contracts
+owned by their respective projects, included only as test data. Details in
+[NOTICE](NOTICE). doppel is not affiliated with any of the projects named in
+this repository.
