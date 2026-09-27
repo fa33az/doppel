@@ -1,6 +1,11 @@
-# doppel
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo-light.svg" alt="doppel" width="300">
+  </picture>
+</p>
 
-**Find the vulnerable twins of a hacked smart contract, across chains, before attackers do.**
+<p align="center"><em>Find the vulnerable twins of a hacked smart contract, across chains, before attackers do.</em></p>
 
 When a contract gets drained, the bug rarely lives in just one place. DeFi code
 gets forked constantly, and a fork inherits its parent's bugs along with
