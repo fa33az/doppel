@@ -8,6 +8,7 @@
 <p align="center"><em>Find the vulnerable twins of a hacked smart contract, across chains, before attackers do.</em></p>
 
 <p align="center">
+  <a href="https://github.com/fa33az/doppel/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/fa33az/doppel/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <img alt="Node 18+" src="https://img.shields.io/badge/node-%E2%89%A518-339933">
   <a href="CONTRIBUTING.md"><img alt="Contributions welcome" src="https://img.shields.io/badge/contributions-welcome-orange"></a>
