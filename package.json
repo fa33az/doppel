@@ -1,16 +1,26 @@
 {
-  "name": "doppel",
-  "version": "0.1.0",
+  "name": "doppel-scan",
+  "version": "0.2.0",
   "description": "Find the vulnerable twins of a hacked smart contract, across chains, before attackers do.",
   "type": "module",
   "bin": {
-    "doppel": "./dist/cli.js"
+    "doppel": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
-    "start": "node dist/cli.js",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "benchmark": "tsx scripts/benchmark.ts",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm test"
   },
   "keywords": [
     "web3",
@@ -18,17 +28,25 @@
     "smart-contract",
     "evm",
     "bytecode",
-    "vulnerability",
+    "incident-response",
     "fork-detection",
-    "clone-detection"
+    "clone-detection",
+    "defi"
   ],
+  "author": "Fawwaz Fadhil Rasyad",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fa33az/doppel.git"
+  },
+  "homepage": "https://github.com/fa33az/doppel#readme",
+  "bugs": "https://github.com/fa33az/doppel/issues",
   "dependencies": {
     "viem": "^2.21.0"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.6.0"
   }
 }
