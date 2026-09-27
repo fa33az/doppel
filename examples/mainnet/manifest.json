@@ -1,0 +1,23 @@
+{
+  "about": "Real deployed bytecode used by tests and the benchmark. Contracts in the same family are forks/redeploys of each other; everything else is unrelated. Re-fetch any entry with: doppel dump <chain>:<address>. Proxies were resolved to the implementation listed, which may have been upgraded since.",
+  "contracts": [
+    { "file": "uniswap-v2-pair.hex", "name": "Uniswap V2 pair (USDC/WETH)", "family": "univ2-pair", "chain": "ethereum", "address": "0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc" },
+    { "file": "uniswap-v2-pair.base.hex", "name": "Uniswap V2 pair", "family": "univ2-pair", "chain": "base", "address": "0x88A43bbDF9D098eEC7bCEda4e2494615dfD9bB9C" },
+    { "file": "quickswap-pair.polygon.hex", "name": "QuickSwap pair", "family": "univ2-pair", "chain": "polygon", "address": "0xd899e25F21222ABE4E6212a7aDb26190B5976268" },
+    { "file": "sushiswap-pair.hex", "name": "SushiSwap pair (USDC/WETH)", "family": "univ2-pair", "chain": "ethereum", "address": "0x397FF1542f962076d0BFE58eA045FfA2d347ACa0" },
+    { "file": "sushiswap-pair.arbitrum.hex", "name": "SushiSwap pair", "family": "univ2-pair", "chain": "arbitrum", "address": "0x8165c70b01b7807351EF0c5ffD3EF010cAbC16fB" },
+    { "file": "pancakeswap-v2-pair.bsc.hex", "name": "PancakeSwap V2 pair (WBNB/BUSD)", "family": "univ2-pair", "chain": "bsc", "address": "0x58F876857a02D6762E0101bb5C46A8c1ED44Dc16" },
+    { "file": "traderjoe-v1-pair.avalanche.hex", "name": "Trader Joe V1 pair", "family": "univ2-pair", "chain": "avalanche", "address": "0xE4B9865C0866346BA3613eC122040A365637fB46" },
+    { "file": "biswap-pair.bsc.hex", "name": "Biswap pair", "family": "univ2-pair", "chain": "bsc", "address": "0xDA8ceb724A06819c0A5cDb4304ea0cB27F8304cF" },
+    { "file": "apeswap-pair.bsc.hex", "name": "ApeSwap pair", "family": "univ2-pair", "chain": "bsc", "address": "0x51e6D27FA57373d8d4C256231241053a70Cb1d93" },
+    { "file": "uniswap-v2-router02.hex", "name": "Uniswap V2 Router02", "family": "univ2-router", "chain": "ethereum", "address": "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D" },
+    { "file": "sushiswap-router.hex", "name": "SushiSwap router", "family": "univ2-router", "chain": "ethereum", "address": "0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F" },
+    { "file": "compound-cdai.hex", "name": "Compound cDAI", "family": "compound-v2-ctoken", "chain": "ethereum", "address": "0x5d3a536E4D6DbD6114cc1Ead35777bAB948E3643", "implementation": "0x3363BAe2Fc44dA742Df13CD3ee94b6bB868ea376" },
+    { "file": "venus-vusdc.bsc.hex", "name": "Venus vUSDC", "family": "compound-v2-ctoken", "chain": "bsc", "address": "0xecA88125a5ADbe82614ffC12D0DB554E2e2867C8", "implementation": "0xCDfea50f7CECCB24Fe804657DB8E6c93b689941e" },
+    { "file": "weth9.hex", "name": "WETH9", "family": "weth9", "chain": "ethereum", "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" },
+    { "file": "dai.hex", "name": "DAI", "family": "dai", "chain": "ethereum", "address": "0x6B175474E89094C44Da98b954EedeAC495271d0F" },
+    { "file": "usdc-implementation.hex", "name": "USDC (FiatToken)", "family": "fiattoken", "chain": "ethereum", "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "implementation": "0x43506849D7C04F9138D1A2050bbF3A0c054402dd" },
+    { "file": "uniswap-v3-pool.hex", "name": "Uniswap V3 pool (USDC/WETH 0.05%)", "family": "univ3-pool", "chain": "ethereum", "address": "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640" },
+    { "file": "aave-v3-pool.hex", "name": "Aave V3 Pool", "family": "aave-v3-pool", "chain": "ethereum", "address": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2", "implementation": "0x728a138A4823392C2EFA55e028d434F526fE03CF" }
+  ]
+}

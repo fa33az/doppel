@@ -79,6 +79,32 @@ export function stripMetadata(hex: string): string {
   return clean.slice(0, blobStart * 2);
 }
 
+// EIP-1167 minimal proxy, and its PUSH0 variant (ERC-7511). The whole runtime
+// is a fixed 45-byte stub with the implementation address baked in, so every
+// clone of every contract looks identical unless we look through it.
+const MINIMAL_PROXIES: { kind: string; re: RegExp }[] = [
+  {
+    kind: "eip-1167",
+    re: /^363d3d373d3d3d363d73([0-9a-f]{40})5af43d82803e903d91602b57fd5bf3$/,
+  },
+  {
+    kind: "erc-7511",
+    re: /^365f5f375f5f365f73([0-9a-f]{40})5af43d5f5f3e5f3d91602a57fd5bf3$/,
+  },
+];
+
+/** If the bytecode is a minimal proxy stub, return the address it forwards to. */
+export function minimalProxyTarget(
+  hex: string
+): { kind: string; target: string } | null {
+  const clean = normalizeHex(hex);
+  for (const { kind, re } of MINIMAL_PROXIES) {
+    const m = clean.match(re);
+    if (m) return { kind, target: "0x" + m[1] };
+  }
+  return null;
+}
+
 /**
  * Walk the bytecode and yield one Instruction per opcode. PUSH immediates are
  * consumed (not mistaken for opcodes), which is the whole reason a naive byte

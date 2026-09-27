@@ -2,280 +2,419 @@
 /**
  * doppel — find the vulnerable twins of a hacked contract.
  *
- * Commands:
- *   doppel fingerprint <source>              Print a contract's fingerprint.
- *   doppel compare <sourceA> <sourceB>       Score similarity of two contracts.
- *   doppel scan <known> <candidate...>       Rank candidates against a known-bad contract.
- *
- * A <source> is one of:
- *   0x60806040...          raw runtime bytecode hex
- *   ./path/to/code.hex     a file containing hex
- *   chain:address          fetch on-chain, e.g. ethereum:0xABC...  base:0xDEF...
- *
- * Flags:
- *   --json                 machine-readable output
- *   --threshold <0..1>     scan: exit non-zero if any candidate scores >= this
- *   --raw                  do not strip the Solidity metadata trailer
- *
  * doppel never executes bytecode and never produces exploits. It reads code
  * and reports structural kinship, so responders can warn the owners of the
  * twins. That is the entire job.
  */
 
 import { readFileSync } from "node:fs";
-import { fingerprint, type FingerprintOptions } from "./fingerprint.js";
-import { compare } from "./similarity.js";
-import { fetchBytecode } from "./fetch.js";
+import { minimalProxyTarget } from "./bytecode.js";
+import { fetchResolved, type ProxyHop } from "./fetch.js";
+import { fingerprint, type Fingerprint } from "./fingerprint.js";
+import { labelFor, parseFunction } from "./signatures.js";
+import { compare, compareFunction } from "./similarity.js";
 
-const HEX_RE = /^(0x)?[0-9a-fA-F]+$/;
+const VERSION = "0.2.0";
+
+// Calibrated on examples/mainnet (npm run benchmark): every labeled fork pair
+// scored >= 0.38, every unrelated pair <= 0.25.
+const DEFAULT_THRESHOLD = 0.3;
 
 interface Flags {
   json: boolean;
   raw: boolean;
+  proxies: boolean;
+  all: boolean;
   threshold: number;
+  fn?: string;
 }
 
-/** Pull flags out of argv, returning the leftover positional args. */
-function parseFlags(argv: string[]): { positional: string[]; flags: Flags } {
+function parseArgs(argv: string[]): { positional: string[]; flags: Flags } {
   const positional: string[] = [];
-  const flags: Flags = { json: false, raw: false, threshold: 0.75 };
+  const flags: Flags = { json: false, raw: false, proxies: true, all: false, threshold: DEFAULT_THRESHOLD };
+  const value = (i: number, name: string) => {
+    const v = argv[i];
+    if (v === undefined) throw new Error(`${name} needs a value`);
+    return v;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--json") flags.json = true;
     else if (a === "--raw") flags.raw = true;
-    else if (a === "--threshold") flags.threshold = parseFloat(argv[++i]);
+    else if (a === "--no-proxy") flags.proxies = false;
+    else if (a === "--all") flags.all = true;
+    else if (a === "--fn") flags.fn = parseFunction(value(++i, "--fn"));
+    else if (a === "--threshold") {
+      flags.threshold = Number(value(++i, "--threshold"));
+      if (!(flags.threshold >= 0 && flags.threshold <= 1)) {
+        throw new Error("--threshold must be between 0 and 1");
+      }
+    } else if (a === "-v" || a === "--version") positional.unshift("version");
+    else if (a === "-h" || a === "--help") positional.unshift("help");
+    else if (a.startsWith("--")) throw new Error(`unknown flag ${a}`);
     else positional.push(a);
   }
   return { positional, flags };
 }
 
-/** Resolve a <source> argument to bytecode hex. */
-async function resolveSource(src: string): Promise<string> {
-  // chain:address
-  if (src.includes(":") && !src.startsWith("0x")) {
-    const idx = src.indexOf(":");
-    const chain = src.slice(0, idx);
-    const address = src.slice(idx + 1);
-    if (/^0x[0-9a-fA-F]{40}$/.test(address)) {
-      return fetchBytecode(chain, address);
+// ─── sources ────────────────────────────────────────────────────────────────
+
+interface Source {
+  label: string;
+  hex: string;
+  hops: ProxyHop[];
+}
+
+const CHAIN_ADDR = /^([a-z0-9-]+|https?:\/\/[^\s]+):(0x[0-9a-fA-F]{40})$/;
+
+/** Resolve a <source> argument to bytecode. */
+async function loadSource(src: string, flags: Flags): Promise<Source> {
+  const m = src.match(CHAIN_ADDR);
+  if (m) {
+    const r = await fetchResolved(m[1], m[2], { followProxies: flags.proxies });
+    return { label: src, hex: r.bytecode, hops: r.hops };
+  }
+  let hex: string;
+  if (/^(0x)?[0-9a-fA-F]+$/.test(src) && src.length > 8) hex = src;
+  else {
+    try {
+      hex = readFileSync(src, "utf8").trim();
+    } catch {
+      throw new Error(`can't read "${src}" — use raw hex, a file path, or chain:address`);
     }
   }
-  // raw hex
-  if (HEX_RE.test(src) && src.length > 8) return src;
-  // file
-  try {
-    return readFileSync(src, "utf8").trim();
-  } catch {
-    throw new Error(
-      `Could not read source "${src}". Use raw hex, a file path, or chain:address.`
+  const stub = minimalProxyTarget(hex);
+  if (stub && flags.proxies) {
+    warn(
+      `${src} is an ${stub.kind} proxy stub for ${stub.target}. ` +
+        `Every clone looks identical — fingerprint the implementation instead ` +
+        `(chain:${stub.target}).`
     );
   }
+  return { label: src, hex, hops: [] };
 }
 
-function bar(x: number, width = 24): string {
-  const filled = Math.round(x * width);
-  return "█".repeat(filled) + "░".repeat(width - filled);
+/** Expand `@file` arguments into one source per non-empty, non-# line. */
+function expandLists(args: string[]): string[] {
+  return args.flatMap((a) => {
+    if (!a.startsWith("@")) return [a];
+    return readFileSync(a.slice(1), "utf8")
+      .split("\n")
+      .map((l) => l.replace(/#.*/, "").trim())
+      .filter(Boolean);
+  });
 }
 
-function pct(x: number): string {
-  return `${(x * 100).toFixed(1)}%`;
+/** Run `fn` over `items` with at most `limit` in flight, preserving order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
-function verdict(total: number): string {
-  if (total >= 0.9) return "TWIN — almost certainly the same code";
-  if (total >= 0.75) return "LIKELY FORK — shares core logic";
-  if (total >= 0.5) return "RELATED — notable shared structure";
+// ─── output helpers ─────────────────────────────────────────────────────────
+
+const color = process.stdout.isTTY && !process.env.NO_COLOR;
+const paint = (code: number) => (s: string) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
+const dim = paint(2);
+const bold = paint(1);
+const red = paint(31);
+const yellow = paint(33);
+const green = paint(32);
+
+function warn(msg: string) {
+  console.error(yellow(`warning: ${msg}`));
+}
+
+function bar(x: number, width = 20): string {
+  const filled = Math.round(Math.max(0, Math.min(1, x)) * width);
+  return "█".repeat(filled) + dim("░".repeat(width - filled));
+}
+
+const pct = (x: number) => `${(x * 100).toFixed(1)}%`.padStart(6);
+
+type Verdict = "TWIN" | "LIKELY FORK" | "RELATED" | "UNRELATED";
+
+function verdictOf(total: number): Verdict {
+  if (total >= 0.85) return "TWIN";
+  if (total >= 0.45) return "LIKELY FORK";
+  if (total >= DEFAULT_THRESHOLD) return "RELATED";
   return "UNRELATED";
 }
 
+const VERDICT_TEXT: Record<Verdict, string> = {
+  TWIN: "same code, redeployed or recompiled",
+  "LIKELY FORK": "same core logic, some changes",
+  RELATED: "heavily modified fork, or a close cousin — worth a look",
+  UNRELATED: "different code",
+};
+
+function paintVerdict(v: Verdict, pad = 0): string {
+  const s = v.padEnd(pad);
+  if (v === "TWIN") return red(bold(s));
+  if (v === "LIKELY FORK") return red(s);
+  if (v === "RELATED") return yellow(s);
+  return dim(s);
+}
+
+function describeHops(hops: ProxyHop[]): string {
+  return hops.map((h) => `${h.kind} → ${h.implementation}`).join(" → ");
+}
+
+// ─── commands ───────────────────────────────────────────────────────────────
+
 async function cmdFingerprint(src: string, flags: Flags) {
-  const fpOpts: FingerprintOptions = { stripMeta: !flags.raw };
-  const fp = fingerprint(await resolveSource(src), fpOpts);
+  const s = await loadSource(src, flags);
+  const fp = fingerprint(s.hex, { stripMeta: !flags.raw });
+  const functions = [...fp.selectors].map((sel) => ({
+    selector: "0x" + sel,
+    name: labelFor(sel),
+    size: fp.functions.get(sel)?.size ?? 0,
+  }));
   if (flags.json) {
-    console.log(
-      JSON.stringify(
-        {
-          instructionCount: fp.instructionCount,
-          selectors: [...fp.selectors].map((s) => "0x" + s),
-          ngramCount: fp.ngrams.size,
-          topOpcodes: Object.fromEntries(
-            Object.entries(fp.opcodeHistogram).sort((a, b) => b[1] - a[1])
-          ),
-        },
-        null,
-        2
-      )
-    );
+    print({ source: s.label, proxy: s.hops, instructions: fp.instructionCount,
+      semanticInstructions: fp.semanticCount, basicBlocks: fp.blockCount,
+      grams: fp.grams.size, functions });
     return;
   }
-  console.log(`instructions : ${fp.instructionCount}`);
-  console.log(`selectors    : ${fp.selectors.size}`);
-  console.log(`4-grams      : ${fp.ngrams.size}`);
-  const top = Object.entries(fp.opcodeHistogram)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([k, v]) => `${k}=${pct(v)}`)
-    .join("  ");
-  console.log(`top opcodes  : ${top}`);
-  if (fp.selectors.size) {
-    console.log(
-      `selector list: ${[...fp.selectors].map((s) => "0x" + s).join(" ")}`
-    );
+  console.log("");
+  console.log(`  ${bold(s.label)}`);
+  if (s.hops.length) console.log(dim(`  via ${describeHops(s.hops)}`));
+  console.log("");
+  console.log(`  instructions  ${fp.instructionCount} ${dim(`(${fp.semanticCount} doing real work)`)}`);
+  console.log(`  basic blocks  ${fp.blockCount}`);
+  console.log(`  3-grams       ${fp.grams.size}`);
+  console.log("");
+  console.log(`  functions (${functions.length})`);
+  for (const f of functions.sort((a, b) => a.name.localeCompare(b.name))) {
+    console.log(`    ${dim(f.selector)}  ${f.name.padEnd(44)} ${dim(`${f.size} ops`)}`);
   }
+  console.log("");
 }
 
 async function cmdCompare(a: string, b: string, flags: Flags) {
-  const fpOpts: FingerprintOptions = { stripMeta: !flags.raw };
-  const [fa, fb] = await Promise.all([
-    resolveSource(a).then((h) => fingerprint(h, fpOpts)),
-    resolveSource(b).then((h) => fingerprint(h, fpOpts)),
-  ]);
-  const s = compare(fa, fb);
+  const [sa, sb] = await Promise.all([loadSource(a, flags), loadSource(b, flags)]);
+  const opts = { stripMeta: !flags.raw };
+  const s = compare(fingerprint(sa.hex, opts), fingerprint(sb.hex, opts));
+  const verdict = verdictOf(s.total);
+
   if (flags.json) {
-    console.log(
-      JSON.stringify(
-        {
-          a,
-          b,
-          verdict: verdict(s.total).split(" — ")[0],
-          score: s.total,
-          breakdown: {
-            opcodes: s.histogram,
-            ngrams: s.ngram,
-            selectors: s.selector,
-          },
-          sharedSelectors: s.sharedSelectors.map((x) => "0x" + x),
-        },
-        null,
-        2
-      )
-    );
+    print({
+      a: { source: sa.label, proxy: sa.hops },
+      b: { source: sb.label, proxy: sb.hops },
+      verdict,
+      score: round(s.total),
+      breakdown: {
+        functions: s.functionsScore === null ? null : round(s.functionsScore),
+        code: round(s.code),
+        selectors: round(s.selector),
+      },
+      functions: s.functions.map((f) => ({ selector: "0x" + f.selector, name: labelFor(f.selector), score: round(f.score) })),
+      onlyInA: s.onlyInA.map((x) => ({ selector: "0x" + x, name: labelFor(x) })),
+      onlyInB: s.onlyInB.map((x) => ({ selector: "0x" + x, name: labelFor(x) })),
+    });
     return;
   }
+
   console.log("");
-  console.log(`  overall   ${bar(s.total)}  ${pct(s.total)}`);
-  console.log(`  opcodes   ${bar(s.histogram)}  ${pct(s.histogram)}`);
-  console.log(`  4-grams   ${bar(s.ngram)}  ${pct(s.ngram)}`);
-  console.log(`  selectors ${bar(s.selector)}  ${pct(s.selector)}`);
+  console.log(`  ${dim("a")}  ${sa.label}`);
+  if (sa.hops.length) console.log(dim(`     via ${describeHops(sa.hops)}`));
+  console.log(`  ${dim("b")}  ${sb.label}`);
+  if (sb.hops.length) console.log(dim(`     via ${describeHops(sb.hops)}`));
   console.log("");
-  console.log(`  ${verdict(s.total)}`);
-  if (s.sharedSelectors.length) {
-    console.log(
-      `  shared selectors: ${s.sharedSelectors
-        .map((x) => "0x" + x)
-        .join(" ")}`
-    );
+  console.log(`  overall    ${bar(s.total)} ${pct(s.total)}   ${paintVerdict(verdict)} ${dim("— " + VERDICT_TEXT[verdict])}`);
+  if (s.functionsScore !== null) {
+    console.log(`  functions  ${bar(s.functionsScore)} ${pct(s.functionsScore)}   ${dim("each function vs. its namesake")}`);
   }
+  console.log(`  code       ${bar(s.code)} ${pct(s.code)}   ${dim("whole-contract logic")}`);
+  console.log(`  selectors  ${bar(s.selector)} ${pct(s.selector)}   ${dim("same ABI surface")}`);
   console.log("");
+
+  if (s.functions.length || s.onlyInA.length || s.onlyInB.length) {
+    console.log(
+      `  functions  ${s.functions.length} shared ${dim("·")} ${s.onlyInA.length} only in a ${dim("·")} ${s.onlyInB.length} only in b`
+    );
+    const shown = flags.all ? s.functions : s.functions.slice(0, 15);
+    for (const f of shown) {
+      console.log(`    ${bar(f.score, 12)} ${pct(f.score)}  ${labelFor(f.selector)}`);
+    }
+    if (shown.length < s.functions.length) {
+      console.log(dim(`    … ${s.functions.length - shown.length} more (--all)`));
+    }
+    const extra = (tag: string, list: string[]) => {
+      if (!list.length) return;
+      const names = list.map(labelFor);
+      const head = flags.all ? names : names.slice(0, 6);
+      console.log(dim(`    ${tag}: ${head.join(", ")}${head.length < names.length ? ", …" : ""}`));
+    };
+    extra("only in a", s.onlyInA);
+    extra("only in b", s.onlyInB);
+    console.log("");
+  }
 }
 
-async function cmdScan(known: string, candidates: string[], flags: Flags) {
-  const fpOpts: FingerprintOptions = { stripMeta: !flags.raw };
-  const base = fingerprint(await resolveSource(known), fpOpts);
-  const rows: { src: string; total: number; ngram: number; error?: string }[] =
-    [];
-  for (const c of candidates) {
-    try {
-      const fp = fingerprint(await resolveSource(c), fpOpts);
-      const s = compare(base, fp);
-      rows.push({ src: c, total: s.total, ngram: s.ngram });
-    } catch (e) {
-      rows.push({ src: c, total: -1, ngram: -1, error: (e as Error).message });
-    }
-  }
-  rows.sort((a, b) => b.total - a.total);
+interface ScanRow {
+  source: string;
+  proxy: ProxyHop[];
+  score: number | null;
+  fnScore?: number | null;
+  verdict?: Verdict;
+  error?: string;
+}
 
-  const hits = rows.filter((r) => r.total >= flags.threshold);
+async function cmdScan(known: string, rawCandidates: string[], flags: Flags) {
+  const candidates = expandLists(rawCandidates);
+  if (!candidates.length) throw new Error("no candidates to scan");
+  const opts = { stripMeta: !flags.raw };
+
+  const victim = await loadSource(known, flags);
+  const base = fingerprint(victim.hex, opts);
+  if (flags.fn && !base.functions.has(flags.fn) && !base.selectors.has(flags.fn)) {
+    throw new Error(`${labelFor(flags.fn)} isn't a function of ${known}`);
+  }
+
+  const rows = await mapLimit(candidates, 4, async (c): Promise<ScanRow> => {
+    try {
+      const src = await loadSource(c, flags);
+      const fp: Fingerprint = fingerprint(src.hex, opts);
+      const s = compare(base, fp);
+      const row: ScanRow = { source: c, proxy: src.hops, score: s.total, verdict: verdictOf(s.total) };
+      if (flags.fn) row.fnScore = compareFunction(base, fp, flags.fn);
+      return row;
+    } catch (e) {
+      return { source: c, proxy: [], score: null, error: (e as Error).message };
+    }
+  });
+
+  // Rank by the function under suspicion when one is given, else overall.
+  const key = (r: ScanRow) => (flags.fn ? r.fnScore ?? -1 : r.score ?? -1);
+  rows.sort((x, y) => key(y) - key(x) || (y.score ?? -1) - (x.score ?? -1));
+  const hits = rows.filter((r) => r.score !== null && key(r) >= flags.threshold);
 
   if (flags.json) {
-    console.log(
-      JSON.stringify(
-        {
-          known,
-          threshold: flags.threshold,
-          matches: hits.length,
-          results: rows.map((r) => ({
-            source: r.src,
-            score: r.total < 0 ? null : r.total,
-            verdict: r.total < 0 ? "ERROR" : verdict(r.total).split(" — ")[0],
-            error: r.error,
-          })),
-        },
-        null,
-        2
-      )
-    );
+    print({
+      known: { source: known, proxy: victim.hops },
+      function: flags.fn ? { selector: "0x" + flags.fn, name: labelFor(flags.fn) } : undefined,
+      threshold: flags.threshold,
+      matches: hits.length,
+      results: rows.map((r) => ({
+        source: r.source,
+        proxy: r.proxy.length ? r.proxy : undefined,
+        score: r.score === null ? null : round(r.score),
+        functionScore: r.fnScore === undefined ? undefined : r.fnScore === null ? null : round(r.fnScore),
+        verdict: r.verdict ?? "ERROR",
+        error: r.error,
+      })),
+    });
   } else {
     console.log("");
-    console.log(`  known-vulnerable: ${known}`);
-    console.log(`  ${"—".repeat(60)}`);
+    console.log(`  known  ${bold(known)}`);
+    if (victim.hops.length) console.log(dim(`         via ${describeHops(victim.hops)}`));
+    if (flags.fn) console.log(`  ranking by ${bold(labelFor(flags.fn))}`);
+    console.log("");
+    console.log(dim(`  ${flags.fn ? "function".padEnd(21) : ""}${"overall".padEnd(21)}verdict      candidate`));
+    console.log(dim(`  ${"─".repeat(72)}`));
     for (const r of rows) {
-      if (r.total < 0) {
-        console.log(`  ${"·".repeat(18)}  ERROR   ${r.src}  (${r.error})`);
+      if (r.score === null) {
+        console.log(`  ${red("error".padEnd(flags.fn ? 53 : 32))}  ${r.source}  ${dim(r.error ?? "")}`);
         continue;
       }
-      console.log(
-        `  ${bar(r.total, 18)} ${pct(r.total).padStart(6)}  ${verdict(r.total)
-          .split(" — ")[0]
-          .padEnd(13)}  ${r.src}`
-      );
+      const fnCol = flags.fn
+        ? r.fnScore === null
+          ? `${dim("missing".padEnd(12))} ${"".padStart(6)}  `
+          : `${bar(r.fnScore!, 12)} ${pct(r.fnScore!)}  `
+        : "";
+      console.log(`  ${fnCol}${bar(r.score, 12)} ${pct(r.score)}  ${paintVerdict(r.verdict!, 11)}  ${r.source}`);
+      if (r.proxy.length) console.log(dim(`  ${" ".repeat(flags.fn ? 55 : 34)}via ${describeHops(r.proxy)}`));
     }
     console.log("");
     if (hits.length) {
-      console.log(
-        `  ⚠ ${hits.length} candidate(s) at or above ${pct(
-          flags.threshold
-        )} — warn their owners.`
-      );
-      console.log("");
+      const what = flags.fn ? `the same ${labelFor(flags.fn)}` : "forks of it";
+      console.log(red(`  ${hits.length} of ${rows.length} candidates ${flags.fn ? "have" : "look like"} ${what} (≥ ${(flags.threshold * 100).toFixed(0)}%).`));
+    } else {
+      console.log(green(`  nothing above ${(flags.threshold * 100).toFixed(0)}%.`));
     }
+    console.log("");
   }
 
-  // CI-friendly: non-zero exit when a likely twin is found.
+  // CI-friendly: exit 2 when something matched, 1 on errors only.
   if (hits.length) process.exitCode = 2;
 }
 
+async function cmdDump(src: string, flags: Flags) {
+  const s = await loadSource(src, flags);
+  if (s.hops.length) console.error(dim(`via ${describeHops(s.hops)}`));
+  console.log(s.hex);
+}
+
+// ─── entry ──────────────────────────────────────────────────────────────────
+
+const round = (x: number) => Math.round(x * 10000) / 10000;
+const print = (x: unknown) => console.log(JSON.stringify(x, null, 2));
+
 function usage() {
-  console.log(`doppel — find the vulnerable twins of a hacked contract
+  console.log(`doppel ${VERSION} — find the vulnerable twins of a hacked contract
 
 USAGE
-  doppel fingerprint <source>            [--json] [--raw]
-  doppel compare <sourceA> <sourceB>     [--json] [--raw]
-  doppel scan <known> <candidate...>     [--json] [--raw] [--threshold 0.75]
+  doppel scan <known> <candidate...>   rank candidates against a known-bad contract
+  doppel compare <a> <b>               side-by-side, down to individual functions
+  doppel fingerprint <source>          what doppel sees in one contract
+  doppel dump <source>                 print resolved bytecode (for fixtures)
 
-<source>
-  0x60806040...        raw runtime bytecode hex
-  ./code.hex           file containing hex
-  chain:address        fetch on-chain (ethereum:0x..  base:0x..  bsc:0x..)
+SOURCES
+  ethereum:0x…         fetch live (ethereum, base, arbitrum, optimism,
+  bsc:0x…              polygon, bsc, avalanche, or https://rpc:0x…)
+  ./code.hex           a file with hex bytecode
+  0x6080…              raw hex
+  @list.txt            (scan) one source per line, # for comments
 
-EXAMPLES
-  doppel compare ./examples/vault_a.hex ./examples/vault_b.hex
-  doppel scan ethereum:0xVICTIM base:0xTWIN1 bsc:0xTWIN2 --threshold 0.85
+OPTIONS
+  --fn <sig|selector>  rank by one function, e.g. --fn "withdraw(uint256)"
+  --threshold <0..1>   what counts as a match (default ${DEFAULT_THRESHOLD})
+  --json               machine-readable output
+  --all                list every function in compare
+  --no-proxy           don't look through proxies
+  --raw                keep the solidity metadata trailer
 
-scan exits with code 2 when any candidate scores >= threshold, so it drops
-straight into CI. doppel reads code and reports structural kinship — it never
-executes bytecode and never generates exploits.`);
+EXIT CODES
+  0 nothing matched · 1 error · 2 at least one candidate matched
+
+RPCs default to publicnode.com; override with DOPPEL_RPC_<CHAIN>=https://…
+
+doppel only reads code. It never executes bytecode or builds exploits.`);
 }
 
 async function main() {
-  const { positional, flags } = parseFlags(process.argv.slice(2));
-  const [cmd, ...rest] = positional;
   try {
+    const { positional, flags } = parseArgs(process.argv.slice(2));
+    const [cmd, ...rest] = positional;
     switch (cmd) {
       case "fingerprint":
-        if (!rest[0]) return usage();
+        if (rest.length !== 1) return usage();
         return await cmdFingerprint(rest[0], flags);
       case "compare":
-        if (rest.length < 2) return usage();
+        if (rest.length !== 2) return usage();
         return await cmdCompare(rest[0], rest[1], flags);
       case "scan":
         if (rest.length < 2) return usage();
         return await cmdScan(rest[0], rest.slice(1), flags);
+      case "dump":
+        if (rest.length !== 1) return usage();
+        return await cmdDump(rest[0], flags);
+      case "version":
+        return console.log(VERSION);
       default:
         return usage();
     }
   } catch (e) {
-    console.error(`error: ${(e as Error).message}`);
+    console.error(red(`error: ${(e as Error).message}`));
     process.exit(1);
   }
 }

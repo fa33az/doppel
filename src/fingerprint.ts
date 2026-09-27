@@ -1,18 +1,24 @@
 /**
- * Turn disassembled bytecode into a fingerprint that survives the cosmetic
- * differences between a contract and its forks/clones.
+ * Turn disassembled bytecode into a fingerprint that survives the differences
+ * between a contract and its forks.
  *
- * A fork typically keeps the same logic but changes: metadata hash (the CBOR
- * blob Solidity appends), constructor args, embedded addresses, and constants.
- * So we fingerprint the *shape* of the code:
+ * Forks rarely match byte for byte. Besides the obvious (metadata hash,
+ * addresses, immutables, fee constants) they're often built with a different
+ * compiler version or optimizer setting, which reshuffles how values move
+ * around the stack. Same logic, very different DUP/SWAP/POP soup.
  *
- *   1. opcodeHistogram  - normalized frequency of each opcode (immediates dropped)
- *   2. ngrams           - set of length-4 opcode sequences (control-flow shape)
- *   3. selectors        - the 4-byte function selectors the dispatcher checks
+ * So doppel looks at the *semantic* instruction stream: everything that does
+ * work (arithmetic, comparisons, memory, storage, calls, logs, jumps) with the
+ * pure stack plumbing (PUSH, DUP, SWAP, POP, JUMPDEST) removed. PUSH4 values
+ * stay in, since those are selectors and are part of what the code means.
+ * This is the same trick binary clone detectors use to ignore register
+ * allocation.
  *
- * These three views are compared independently and blended, which makes the
- * score robust: a superficial re-deploy scores near 1.0, an unrelated contract
- * near 0.
+ * From that stream we keep:
+ *   - grams      whole-contract set of semantic 3-grams
+ *   - selectors  functions the dispatcher routes to
+ *   - functions  per selector: the semantic bigrams of everything that
+ *                function can reach, plus its size
  */
 
 import {
@@ -21,38 +27,21 @@ import {
   stripMetadata,
   type Instruction,
 } from "./bytecode.js";
+import { buildCfg, functionEntries, reachable } from "./cfg.js";
 
-export interface Fingerprint {
-  /** opcode name -> normalized frequency (sums to ~1) */
-  opcodeHistogram: Record<string, number>;
-  /** set of "OP|OP|OP|OP" 4-grams */
-  ngrams: Set<string>;
-  /** function selectors found in the dispatcher, hex without 0x */
-  selectors: Set<string>;
-  /** number of instructions, useful as a sanity signal */
-  instructionCount: number;
+export interface FunctionPrint {
+  grams: Set<string>;
+  /** Semantic instructions in the footprint; used to weight functions. */
+  size: number;
 }
 
-const NGRAM_N = 4;
-
-/**
- * Solidity's function dispatcher compares calldata's first 4 bytes against
- * each selector using `PUSH4 <selector> ... EQ`. Collecting those PUSH4
- * immediates is a cheap, reliable way to recover a contract's ABI surface
- * straight from bytecode.
- */
-function extractSelectors(instrs: Instruction[]): Set<string> {
-  const selectors = new Set<string>();
-  for (const ins of instrs) {
-    // PUSH4 with a 4-byte (8 hex char) immediate.
-    if (ins.name === "PUSH4" && ins.push && ins.push.length === 8) {
-      // Skip the all-zero / all-f sentinels that show up as masks, not selectors.
-      if (ins.push !== "00000000" && ins.push !== "ffffffff") {
-        selectors.add(ins.push);
-      }
-    }
-  }
-  return selectors;
+export interface Fingerprint {
+  grams: Set<string>;
+  selectors: Set<string>;
+  functions: Map<string, FunctionPrint>;
+  instructionCount: number;
+  semanticCount: number;
+  blockCount: number;
 }
 
 export interface FingerprintOptions {
@@ -60,35 +49,74 @@ export interface FingerprintOptions {
   stripMeta?: boolean;
 }
 
+const PLUMBING = /^(PUSH\d*|DUP\d+|SWAP\d+|POP|JUMPDEST)$/;
+
+/** The semantic token for an instruction, or null for stack plumbing. */
+export function semantic(ins: Instruction): string | null {
+  if (ins.name === "PUSH4" && ins.push) return `S:${ins.push}`;
+  return PLUMBING.test(ins.name) ? null : ins.name;
+}
+
+function semanticOps(instrs: Instruction[]): string[] {
+  const out: string[] = [];
+  for (const ins of instrs) {
+    const s = semantic(ins);
+    if (s) out.push(s);
+  }
+  return out;
+}
+
+function ngrams(ops: string[], n: number, into = new Set<string>()): Set<string> {
+  if (ops.length && ops.length < n) into.add(ops.join("|"));
+  for (let i = 0; i + n <= ops.length; i++) into.add(ops.slice(i, i + n).join("|"));
+  return into;
+}
+
+/**
+ * Fallback for code whose dispatcher we don't recognise (e.g. Vyper): every
+ * PUSH4 is a candidate selector. Noisier, but better than nothing.
+ */
+function push4Selectors(instrs: Instruction[]): Set<string> {
+  const out = new Set<string>();
+  for (const ins of instrs) {
+    if (ins.name === "PUSH4" && ins.push && ins.push !== "00000000" && ins.push !== "ffffffff") {
+      out.add(ins.push);
+    }
+  }
+  return out;
+}
+
 export function fingerprint(
   bytecodeHex: string,
   opts: FingerprintOptions = {}
 ): Fingerprint {
   const stripMeta = opts.stripMeta ?? true;
-  const clean = stripMeta
-    ? stripMetadata(bytecodeHex)
-    : normalizeHex(bytecodeHex);
+  const clean = stripMeta ? stripMetadata(bytecodeHex) : normalizeHex(bytecodeHex);
   const instrs = disassemble(clean);
+  const ops = semanticOps(instrs);
+  const cfg = buildCfg(instrs);
 
-  // 1. opcode histogram (names only — immediates are ignored on purpose)
-  const counts: Record<string, number> = {};
-  for (const ins of instrs) counts[ins.name] = (counts[ins.name] ?? 0) + 1;
-  const total = instrs.length || 1;
-  const opcodeHistogram: Record<string, number> = {};
-  for (const [k, v] of Object.entries(counts)) opcodeHistogram[k] = v / total;
-
-  // 2. opcode 4-grams
-  const ngrams = new Set<string>();
-  for (let i = 0; i + NGRAM_N <= instrs.length; i++) {
-    const gram = instrs
-      .slice(i, i + NGRAM_N)
-      .map((x) => x.name)
-      .join("|");
-    ngrams.add(gram);
+  const functions = new Map<string, FunctionPrint>();
+  const entries = functionEntries(instrs);
+  for (const [selector, entry] of entries) {
+    const grams = new Set<string>();
+    let size = 0;
+    // Bigrams per block, so we never stitch together two blocks that only
+    // happen to sit next to each other in the byte layout.
+    for (const idx of [...reachable(cfg, entry)].sort((a, b) => a - b)) {
+      const blockOps = semanticOps(cfg.blocks[idx].instrs);
+      size += blockOps.length;
+      ngrams(blockOps, 2, grams);
+    }
+    functions.set(selector, { grams, size });
   }
 
-  // 3. function selectors
-  const selectors = extractSelectors(instrs);
-
-  return { opcodeHistogram, ngrams, selectors, instructionCount: instrs.length };
+  return {
+    grams: ngrams(ops, 3),
+    selectors: entries.size ? new Set(entries.keys()) : push4Selectors(instrs),
+    functions,
+    instructionCount: instrs.length,
+    semanticCount: ops.length,
+    blockCount: cfg.blocks.length,
+  };
 }

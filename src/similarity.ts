@@ -1,63 +1,89 @@
 /**
  * Similarity scoring between two fingerprints.
  *
- * We blend three signals, each in [0, 1]:
- *   - cosine similarity of opcode histograms  (overall instruction mix)
- *   - Jaccard of opcode 4-grams               (control-flow shape)
- *   - Jaccard of function selectors           (ABI surface)
+ * The main signal is function-aligned: every selector that appears in either
+ * contract is compared with its namesake on the other side, and the results
+ * are averaged, weighted by function size. A function one side doesn't have
+ * counts as 0. Aligning by selector keeps unrelated code from diluting the
+ * score and makes missing or extra functions count against it.
  *
- * The weights favor the 4-gram shape, because that is the hardest thing to
- * keep identical by accident and the easiest to keep identical in a fork.
+ * It is blended with a whole-contract score (Jaccard of semantic 3-grams),
+ * which also covers code outside any function (constructor leftovers,
+ * fallback logic) and is the only signal when no dispatcher is found.
+ *
+ * Weights and verdict thresholds were calibrated on the labeled contracts in
+ * examples/mainnet — run `npm run benchmark` to see how they hold up.
  */
 
 import type { Fingerprint } from "./fingerprint.js";
 
+export interface FunctionScore {
+  selector: string;
+  score: number;
+}
+
 export interface Score {
-  total: number; // blended, 0..1
-  histogram: number;
-  ngram: number;
+  total: number;
+  /** Function-aligned similarity, or null when either side has no dispatcher. */
+  functionsScore: number | null;
+  code: number;
   selector: number;
-  sharedSelectors: string[];
+  /** Shared selectors with per-function similarity, best match first. */
+  functions: FunctionScore[];
+  onlyInA: string[];
+  onlyInB: string[];
 }
 
-const WEIGHTS = { histogram: 0.25, ngram: 0.55, selector: 0.2 };
+export const WEIGHTS = { functions: 0.7, code: 0.3 };
 
-function cosine(a: Record<string, number>, b: Record<string, number>): number {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
-  for (const k of keys) {
-    const x = a[k] ?? 0;
-    const y = b[k] ?? 0;
-    dot += x * y;
-    na += x * x;
-    nb += y * y;
-  }
-  if (na === 0 || nb === 0) return 0;
-  return dot / (Math.sqrt(na) * Math.sqrt(nb));
-}
-
-function jaccard<T>(a: Set<T>, b: Set<T>): number {
-  if (a.size === 0 && b.size === 0) return 1; // both empty == identical (trivially)
+export function jaccard<T>(a: Set<T>, b: Set<T>): number {
+  if (a.size === 0 && b.size === 0) return 1; // nothing to disagree on
   let inter = 0;
-  for (const x of a) if (b.has(x)) inter++;
-  const union = a.size + b.size - inter;
-  return union === 0 ? 0 : inter / union;
+  const [small, big] = a.size < b.size ? [a, b] : [b, a];
+  for (const x of small) if (big.has(x)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
+/** Similarity of one function across two contracts, or null if either lacks it. */
+export function compareFunction(a: Fingerprint, b: Fingerprint, selector: string): number | null {
+  const fa = a.functions.get(selector);
+  const fb = b.functions.get(selector);
+  if (!fa || !fb) return null;
+  return jaccard(fa.grams, fb.grams);
+}
+
+function aligned(a: Fingerprint, b: Fingerprint): number | null {
+  if (!a.functions.size || !b.functions.size) return null;
+  let num = 0;
+  let den = 0;
+  for (const s of new Set([...a.functions.keys(), ...b.functions.keys()])) {
+    const fa = a.functions.get(s);
+    const fb = b.functions.get(s);
+    const w = Math.max(fa?.size ?? 0, fb?.size ?? 0, 1);
+    den += w;
+    if (fa && fb) num += w * jaccard(fa.grams, fb.grams);
+  }
+  return num / den;
 }
 
 export function compare(a: Fingerprint, b: Fingerprint): Score {
-  const histogram = cosine(a.opcodeHistogram, b.opcodeHistogram);
-  const ngram = jaccard(a.ngrams, b.ngrams);
+  const functionsScore = aligned(a, b);
+  const code = jaccard(a.grams, b.grams);
   const selector = jaccard(a.selectors, b.selectors);
 
-  const shared: string[] = [];
-  for (const s of a.selectors) if (b.selectors.has(s)) shared.push(s);
+  const functions: FunctionScore[] = [];
+  const onlyInA: string[] = [];
+  for (const s of a.selectors) {
+    if (!b.selectors.has(s)) onlyInA.push(s);
+    else functions.push({ selector: s, score: compareFunction(a, b, s) ?? 0 });
+  }
+  const onlyInB = [...b.selectors].filter((s) => !a.selectors.has(s));
+  functions.sort((x, y) => y.score - x.score);
 
   const total =
-    WEIGHTS.histogram * histogram +
-    WEIGHTS.ngram * ngram +
-    WEIGHTS.selector * selector;
+    functionsScore === null
+      ? code
+      : WEIGHTS.functions * functionsScore + WEIGHTS.code * code;
 
-  return { total, histogram, ngram, selector, sharedSelectors: shared };
+  return { total, functionsScore, code, selector, functions, onlyInA, onlyInB };
 }
