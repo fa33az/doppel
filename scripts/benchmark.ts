@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * Score every pair of contracts in examples/mainnet and check the verdicts
  * against the family labels in manifest.json.

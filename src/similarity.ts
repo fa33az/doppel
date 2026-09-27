@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * Similarity scoring between two fingerprints.
  *

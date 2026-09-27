@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: MIT
 /**
  * doppel — find the vulnerable twins of a hacked contract.
  *

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * Fetch on-chain runtime bytecode for an address over plain JSON-RPC, looking
  * through proxies to the code that actually runs.

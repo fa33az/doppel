@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * Turn disassembled bytecode into a fingerprint that survives the differences
  * between a contract and its forks.

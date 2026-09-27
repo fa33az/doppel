@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * Basic blocks and per-function footprints.
  *

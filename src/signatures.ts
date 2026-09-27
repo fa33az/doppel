@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * A small offline table of common function signatures, so reports can say
  * `withdraw(uint256)` instead of `0x2e1a7d4d`. Selectors are computed from the
